@@ -1928,8 +1928,7 @@ static Handle<Array> EnvEnumerator(const AccessorInfo& info) {
   return scope.Close(env);
 }
 
-
-static void Load(int argc, char *argv[]) {
+Handle<Object> SetupProcessObject(int argc, char *argv[]) {
   HandleScope scope;
 
   int i, j;
@@ -2059,6 +2058,23 @@ static void Load(int argc, char *argv[]) {
   process->Set(String::NewSymbol("EventEmitter"),
                EventEmitter::constructor_template->GetFunction());
 
+
+
+
+   return process ;
+}
+
+
+
+static void AtExit() {
+  node::Stdio::Flush();
+  node::Stdio::DisableRawMode(STDIN_FILENO);
+}
+
+void Load(Handle<Object> process) {
+  ////////////////////////////// END PROCESS OBJECT CODE ///////////////////////////////////////////////
+
+  atexit( node::AtExit ) ;
   // Compile, execute the src/node.js file. (Which was included as static C
   // string in node_natives.h. 'natve_node' is the string containing that
   // source code.)
@@ -2193,10 +2209,6 @@ static void ParseArgs(int *argc, char **argv) {
 }
 
 
-static void AtExit() {
-  node::Stdio::Flush();
-  node::Stdio::DisableRawMode(STDIN_FILENO);
-}
 
 
 static void SignalExit(int signal) {
@@ -2256,8 +2268,7 @@ static int RegisterSignalHandler(int signal, void (*handler)(int)) {
 }
 #endif // __POSIX__
 
-
-int Start(int argc, char *argv[]) {
+char** Init(int argc, char *argv[]) {
   // Hack aroung with the argv pointer. Used for process.title = "blah".
   argv = node::Platform::SetupArgs(argc, argv);
 
@@ -2349,8 +2360,6 @@ int Start(int argc, char *argv[]) {
     eio_set_max_poll_reqs(10);
   }
 
-  V8::Initialize();
-  HandleScope handle_scope;
 
   V8::SetFatalErrorHandler(node::OnFatalError);
 
@@ -2381,15 +2390,45 @@ int Start(int argc, char *argv[]) {
 #endif // __POSIX__
   }
 
+  return argv;
+}
+
+
+void EmitExit(v8::Handle<v8::Object> process) {
+  // process.emit('exit')
+  Local<Value> emit_v = process->Get(String::New("emit"));
+  assert(emit_v->IsFunction());
+  Local<Function> emit = Local<Function>::Cast(emit_v);
+  Local<Value> args[] = { String::New("exit") };
+  TryCatch try_catch;
+  emit->Call(process, 1, args);
+  if (try_catch.HasCaught()) {
+    FatalException(try_catch);
+  }
+}
+
+
+void Run()
+   {
+    ev_idle_start(EV_DEFAULT_UC_ &eio_poller);
+    ev_loop(EV_DEFAULT_UC_ 0);
+   }
+
+
+int Start(int argc, char *argv[]) {
+   v8::V8::Initialize();
+  v8::HandleScope handle_scope;
+
+  argv = Init(argc, argv);
   // Create the one and only Context.
   Persistent<v8::Context> context = v8::Context::New();
   v8::Context::Scope context_scope(context);
 
-  atexit(node::AtExit);
+   Handle<Object> process = SetupProcessObject(argc, argv);
 
   // Create all the objects, load modules, do everything.
   // so your next reading stop should be node::Load()!
-  node::Load(argc, argv);
+  Load(process);
 
   // TODO Probably don't need to start this each time.
   // Avoids failing on test/simple/test-eio-race3.js though
@@ -2403,16 +2442,7 @@ int Start(int argc, char *argv[]) {
   ev_loop(EV_DEFAULT_UC_ 0);
 
 
-  // process.emit('exit')
-  Local<Value> emit_v = process->Get(String::New("emit"));
-  assert(emit_v->IsFunction());
-  Local<Function> emit = Local<Function>::Cast(emit_v);
-  Local<Value> args[] = { String::New("exit") };
-  TryCatch try_catch;
-  emit->Call(process, 1, args);
-  if (try_catch.HasCaught()) {
-    FatalException(try_catch);
-  }
+  EmitExit( process ) ;
 
 
 #ifndef NDEBUG
